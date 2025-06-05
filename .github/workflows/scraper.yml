@@ -1,7 +1,9 @@
 name: News Scraper Pipeline
 
 on:
-  push: # Trigger on every push to the default branch
+  schedule:
+    # Runs every day at 10pm Pakistani (adjust cron for your timezone if needed)
+    - cron: "0 17 * * *"
   workflow_dispatch: # Allow manual trigger
 
 jobs:
