@@ -1,0 +1,20 @@
+i have created a news app (using MERN Stack and Spacy for NLP) and i am planning to add a new feature to it called future analysis of news.the new feature will be deployed as a web service api so it doesnt need a frontend. i have a database of news articles and i want the new feature to scan all the articles in a certain cluster (a cluster has articles grouped on the basis of subject matter i.e articles about the same event) and then pick out all the possibilities for the future that are discussed in all the articles in that cluster. then it should output a json object which i will send to the frontend to be displayed in an elegant way. i want to pick out all the possibilities (about how the news story might unfold in the future) and then based on some metrics determine which outcomes are most likely to come true and then assign them each a likelihood score and send this data to the frontend where each possibility will displayed in its own card (card will display the name of the possibility like 'market crash' or 'negotiated settlement' in the title and then a bar or percentage representing how likely it is to come true) and upon clicking the card the user will see the detailed reasoning behind why we have come to that conclusion.follow thestructure of this json object that we will send as final output to frontend "{
+  "clusterId": "cluster-123",
+  "clusterTopic": "US-China Trade Negotiations",
+  "possibilities": [
+    {
+      "id": "1",
+      "title": "Trade Agreement Reached",
+      "likelihoodScore": 75,
+      "summary": "Both countries reach a compromise agreement within weeks",
+      "reasoning": "Multiple sources cite progress in negotiations, with officials from both sides expressing optimism. Recent meetings have resolved several key issues."
+    },
+    {
+      "id": "2",
+      "title": "Negotiations Collapse",
+      "likelihoodScore": 15,
+      "summary": "Talks break down over unresolved disputes",
+      "reasoning": "Ongoing disagreements about intellectual property protections remain contentious. Two articles mention ultimatums being considered."
+    }
+  ]
+} " and then build this feature for me.

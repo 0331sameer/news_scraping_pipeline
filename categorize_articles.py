@@ -23,13 +23,13 @@ print("Connected to MongoDB!")
 
 
 def fetch_articles():
-    print("Fetching articles from MongoDB...")
+    print("Fetching uncategorized articles from MongoDB...")
     articles = list(
         articles_collection.find(
-            {"artcles_categorized": False}
+            {"artcles_categorized": {"$ne": True}}
         )
     )
-    print(f"✅ Fetched {len(articles)} articles.")
+    print(f"✅ Fetched {len(articles)} uncategorized articles.")
     return articles
 
 
@@ -68,59 +68,247 @@ def compute_tfidf_weighted_entities(articles, article_signatures):
 
 def cluster_articles(article_signatures, article_relationships):
     clusters = defaultdict(list)
+    unclustered_articles = []
     print("Clustering articles...")
+    
     for article_id, entities in tqdm(
         article_signatures.items(), desc="Clustering"
     ):
         matched_cluster = None
+        best_similarity = 0
+        
+        # Find the best matching cluster
         for cluster_id, cluster_articles in clusters.items():
-            common_entities = sum(
-                1
-                for other_id in cluster_articles
-                if len(entities & article_signatures[other_id]) >= 3
+            if not cluster_articles:  # Skip empty clusters
+                continue
+                
+            # Calculate similarity with existing cluster
+            cluster_similarities = []
+            for other_id in cluster_articles:
+                other_entities = article_signatures[other_id]
+                if len(entities) == 0 and len(other_entities) == 0:
+                    similarity = 0
+                else:
+                    # Use Jaccard similarity: intersection / union
+                    intersection = len(entities & other_entities)
+                    union = len(entities | other_entities)
+                    similarity = intersection / union if union > 0 else 0
+                cluster_similarities.append(similarity)
+            
+            # Average similarity with cluster
+            avg_similarity = sum(cluster_similarities) / len(cluster_similarities)
+            
+            # Require minimum similarity threshold and minimum shared entities
+            min_shared_entities = min(2, max(1, len(entities) // 3))  # Adaptive threshold
+            shared_entities = sum(
+                1 for other_id in cluster_articles
+                if len(entities & article_signatures[other_id]) >= min_shared_entities
             )
-            if common_entities >= len(cluster_articles) / 2:
-                matched_cluster = cluster_id
-                break
+            
+            # Cluster criteria: good similarity AND sufficient entity overlap
+            similarity_threshold = 0.3  # 30% similarity threshold
+            min_shared_threshold = max(1, len(cluster_articles) // 2)
+            if (avg_similarity >= similarity_threshold and
+                shared_entities >= min_shared_threshold):
+                if avg_similarity > best_similarity:
+                    best_similarity = avg_similarity
+                    matched_cluster = cluster_id
+        
         if matched_cluster is not None:
             clusters[matched_cluster].append(article_id)
         else:
-            clusters[len(clusters)] = [article_id]
-    print(f"✅ Generated {len(clusters)} clusters.")
-    return clusters
+            # Don't create single-article clusters immediately
+            unclustered_articles.append(article_id)
+    
+    # Try to cluster remaining unclustered articles with each other
+    print(f"Attempting to cluster {len(unclustered_articles)} remaining articles...")
+    
+    for article_id in unclustered_articles:
+        entities = article_signatures[article_id]
+        matched_cluster = None
+        best_similarity = 0
+        
+        # Check if it can form a cluster with other unclustered articles
+        for other_id in unclustered_articles:
+            if article_id == other_id:
+                continue
+                
+            other_entities = article_signatures[other_id]
+            if len(entities) == 0 and len(other_entities) == 0:
+                continue
+                
+            intersection = len(entities & other_entities)
+            union = len(entities | other_entities)
+            similarity = intersection / union if union > 0 else 0
+            
+            # Lower threshold for creating new clusters
+            if similarity >= 0.25 and intersection >= 2:
+                # Find existing cluster or create new one
+                found_cluster = None
+                for cluster_id, cluster_articles in clusters.items():
+                    if other_id in cluster_articles:
+                        found_cluster = cluster_id
+                        break
+                
+                if found_cluster is not None:
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        matched_cluster = found_cluster
+                else:
+                    # Create new cluster with both articles
+                    new_cluster_id = len(clusters)
+                    clusters[new_cluster_id] = [other_id, article_id]
+                    # Remove from unclustered list
+                    if other_id in unclustered_articles:
+                        unclustered_articles = [x for x in unclustered_articles if x != other_id]
+                    break
+        
+        if matched_cluster is not None and article_id not in clusters[matched_cluster]:
+            clusters[matched_cluster].append(article_id)
+        elif not any(article_id in cluster_articles for cluster_articles in clusters.values()):
+            # Only create single-article cluster if article has substantial content
+            if len(entities) >= 3:  # Only if article has meaningful entities
+                clusters[len(clusters)] = [article_id]
+    
+    # Filter out clusters that are too small (optional - keep for now but mark them)
+    valid_clusters = {}
+    single_article_clusters = {}
+    
+    for cluster_id, cluster_articles in clusters.items():
+        if len(cluster_articles) >= 2:
+            valid_clusters[cluster_id] = cluster_articles
+        else:
+            single_article_clusters[cluster_id] = cluster_articles
+    
+    print(f"✅ Generated {len(valid_clusters)} multi-article clusters and {len(single_article_clusters)} single-article clusters.")
+    
+    # Return both types but we'll handle them differently
+    return valid_clusters, single_article_clusters
 
 
 def generate_summary(texts, summary_pipeline):
+    """Generate a comprehensive 4+ line summary from multiple article texts."""
     texts = [" ".join(text) if isinstance(text, list) else text for text in texts]
-    combined_text = " ".join(texts[:5])
+    
+    # Use more text for better context (up to 8 articles, more characters)
+    combined_text = " ".join(texts[:8])
+    
+    # Truncate to fit model limits but keep more content
+    if len(combined_text) > 2048:
+        combined_text = combined_text[:2048]
+    
+    # Generate longer, more detailed summary
     summary = summary_pipeline(
-        combined_text[:1024],
-        max_length=150,
-        min_length=50,
-        do_sample=False,
+        combined_text,
+        max_length=300,  # Increased from 150 to ensure 4+ lines
+        min_length=120,  # Increased from 50 to ensure substantial content
+        do_sample=True,  # Enable sampling for more varied output
+        temperature=0.7,  # Add some creativity while maintaining coherence
         truncation=True,
     )[0]["summary_text"]
+    
+    # Post-process to ensure quality
+    sentences = summary.split('. ')
+    if len(sentences) < 4:
+        # If summary is too short, try generating another one with different parameters
+        extended_summary = summary_pipeline(
+            combined_text,
+            max_length=400,
+            min_length=150,
+            do_sample=True,
+            temperature=0.8,
+            truncation=True,
+        )[0]["summary_text"]
+        
+        # Use the longer one
+        if len(extended_summary.split('. ')) > len(sentences):
+            summary = extended_summary
+    
     return summary
 
 
-def generate_topic(summary_text, topic_pipeline):
-    topic_prompt = (
-        "Generate a one phrase news title from the summary. "
-        "it should say what happened, who did it and to whom. "
-        "mentioned the names of the entities involved.: "
-        f"{summary_text}"
+def generate_topic(summary_text, topic_pipeline, cluster_articles_list):
+    """Generate an informative news title that captures the main story."""
+    
+    # Extract key information from articles for better title generation
+    titles = [article.get("title", "") for article in cluster_articles_list if article.get("title")]
+    sources = list(set([article.get("source", "") for article in cluster_articles_list if article.get("source")]))
+    
+    # Create a more detailed prompt for better title generation
+    title_prompt = (
+        f"Write a clear, informative news headline based on this summary. "
+        f"The headline should be specific, mention key people/organizations, and capture the main event. "
+        f"Keep it under 15 words and make it engaging:\n\n"
+        f"Summary: {summary_text[:500]}\n\n"
+        f"Headline:"
     )
-    initial_topic = topic_pipeline(
-        topic_prompt, max_new_tokens=25, do_sample=False, truncation=True
+    
+    try:
+        # Generate title with better parameters
+        generated_response = topic_pipeline(
+            title_prompt, 
+            max_new_tokens=30,  # Increased for longer titles
+            do_sample=True,
+            temperature=0.6,  # Balanced creativity
+            pad_token_id=topic_pipeline.tokenizer.eos_token_id,
+            num_return_sequences=1
     )[0]["generated_text"]
-    topic = initial_topic.replace(topic_prompt, "").strip()
-    return topic
+        
+        # Extract just the headline part
+        topic = generated_response.replace(title_prompt, "").strip()
+        
+        # Clean up the generated title
+        topic = topic.split('\n')[0].strip()  # Take first line only
+        topic = topic.replace('"', '').replace("'", "")  # Remove quotes
+        
+        # If title is too short or generic, create a fallback
+        if len(topic.split()) < 4 or topic.lower().startswith(('the', 'a', 'an', 'this', 'that')):
+            # Create fallback title from summary key points
+            summary_words = summary_text.split()[:50]  # First 50 words
+            key_phrases = []
+            
+            # Look for action words and entities
+            action_words = ['announces', 'reports', 'says', 'confirms', 'reveals', 'launches', 'plans', 'agrees', 'decides']
+            for i, word in enumerate(summary_words):
+                if word.lower() in action_words and i > 0:
+                    # Take context around action word
+                    start = max(0, i-3)
+                    end = min(len(summary_words), i+4)
+                    key_phrases.append(' '.join(summary_words[start:end]))
+                    break
+            
+            if key_phrases:
+                topic = key_phrases[0].strip()
+            else:
+                # Last resort: use first meaningful sentence from summary
+                sentences = summary_text.split('. ')
+                topic = sentences[0] if sentences else "News Update"
+        
+        # Ensure title is not too long
+        if len(topic) > 100:
+            topic = topic[:97] + "..."
+            
+        return topic.strip()
+        
+    except Exception as e:
+        print(f"Warning: Title generation failed ({e}), using fallback")
+        # Fallback to first sentence of summary
+        sentences = summary_text.split('. ')
+        return sentences[0][:100] if sentences else "News Update"
 
 
 def main():
+    print("🚀 Starting Article Categorization Process")
+    print("=" * 50)
+    print("ℹ️  This process will:")
+    print("   • Only process NEW uncategorized articles")
+    print("   • PRESERVE existing categories in the database")
+    print("   • Add new categories alongside existing ones")
+    print("-" * 50)
+    
     articles = fetch_articles()
     if not articles:
-        print("No articles found in the database. Exiting.")
+        print("✅ No new uncategorized articles found. All articles are already processed!")
         return
     article_signatures = {}
     article_relationships = {}
@@ -133,13 +321,15 @@ def main():
     print("Computing TF-IDF weights...")
     compute_tfidf_weighted_entities(articles, article_signatures)
     print("✅ TF-IDF entity weighting completed!")
-    clusters = cluster_articles(article_signatures, article_relationships)
+    clusters, single_article_clusters = cluster_articles(article_signatures, article_relationships)
     print("Loading AI models for summarization & topic generation...")
     summary_pipeline = pipeline("summarization", model="facebook/bart-large-cnn")
     topic_pipeline = pipeline("text-generation", model="openai-community/gpt2")
     print("✅ AI models loaded.")
     cluster_documents = []
     print("Generating cluster documents...")
+    
+    # Only process multi-article clusters for categorization
     for cluster_id, article_ids in tqdm(
         clusters.items(), desc="Saving clusters"
     ):
@@ -151,7 +341,7 @@ def main():
             for article in cluster_articles_list
         ]
         summary = generate_summary(texts, summary_pipeline)
-        topic = generate_topic(summary, topic_pipeline)
+        topic = generate_topic(summary, topic_pipeline, cluster_articles_list)
         # Get image URL of the top article (first in cluster)
         image_url = None
         if cluster_articles_list:
@@ -166,20 +356,28 @@ def main():
             "Analytics": [],
         }
         cluster_documents.append(cluster_doc)
+    
+    # Store results
     if cluster_documents:
-        clusters_collection.drop()
+        # Insert new clusters without dropping existing ones
         clusters_collection.insert_many(cluster_documents)
-        print("✅ Clusters stored successfully in MongoDB!")
-        # Mark processed articles as categorized
-        all_article_ids = [aid for cluster in cluster_documents for aid in cluster["articles"]]
-        if all_article_ids:
+        print("✅ New clusters stored successfully in MongoDB!")
+        # Only mark articles as categorized if they're in multi-article clusters
+        multi_article_ids = [aid for cluster in cluster_documents for aid in cluster["articles"]]
+        if multi_article_ids:
             articles_collection.update_many(
-                {"_id": {"$in": all_article_ids}},
+                {"_id": {"$in": multi_article_ids}},
                 {"$set": {"artcles_categorized": True}}
             )
-            print(f"✅ Marked {len(all_article_ids)} articles as categorized.")
+            print(f"✅ Marked {len(multi_article_ids)} articles as categorized.")
+        
+        # Report on single-article clusters (these remain uncategorized)
+        single_article_ids = [aid for cluster in single_article_clusters.values() for aid in cluster]
+        if single_article_ids:
+            print(f"ℹ️  {len(single_article_ids)} articles remain uncategorized (insufficient similarity).")
     else:
-        print("No clusters to store.")
+        print("No multi-article clusters to store.")
+        print(f"ℹ️  Found {len(single_article_clusters)} single-article clusters - these remain uncategorized.")
 
 
 if __name__ == "__main__":

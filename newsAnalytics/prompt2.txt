@@ -1,0 +1,45 @@
+ 1. MongoDB Connection details & Article Structure:
+ 
+ connection string : "mongodb+srv://jamshidjunaid763:JUNAID12345@insightwirecluster.qz5cz.mongodb.net/?retryWrites=true&w=majority&appName=InsightWireCluster"
+
+
+ the database name is "Scraped-Articles-11" and the collections name is "categorizedarticles".
+
+ structure of the news article object in DB : "{
+    title: { type: String, required: true },
+    url: { type: String, required: true, unique: true },
+    content: { type: [String], required: true }, // Array of strings (paragraphs)
+    date: { type: String, required: true }, // Can hold "Loading..." if not available
+    publication: { type: String, required: true }, // Name of the publication
+
+    // Bias Classification
+    biasness: { type: String, default: "Unclassified" }, // Stores bias label (e.g., "LABEL_0")
+    score: { type: Number, default: 0.0 }, // Confidence score (0-1)
+
+  }"
+
+  structure of the articlesCluster object in DB : "{
+        title: { type: String, required: true, trim: true, index: true },
+        summary: { type: String, required: true, trim: true },
+        articles: [{ type: mongoose.Schema.Types.ObjectId, ref: "ScrapedArticle", default: [] }], // References Scraped Articles
+    }"
+3. Compute resources :
+    typical size of clusters : anywhere from 3 to 50 articles in a cluster
+
+    average length of articles : none exceeds 500 words but this is not a hard limit, just a rough estimate
+
+4. Performance requirements:
+
+    the code should be asynchronous and acceptable response time should be under 1 minute.
+
+5. Language Requirements:
+
+    all the articles are in english.
+
+6. Instructions for optimization:
+
+    yes, we should use the smaller model initially. we'll see how it performs and then we'll upgrade if we have to.
+
+    yes we should implement batch processing for large clusters.
+
+    instead of cacheing we should send the output json object to the database too (with id which references its cluster) as well as the frontend
