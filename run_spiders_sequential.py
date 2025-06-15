@@ -32,13 +32,13 @@ def run_spider(spider_name):
 def main():
     # List of spiders to run
     spiders = [
-        #'aljazeeraspider',
-        #'arabnewsspider',
+        'aljazeeraspider',
+        'arabnewsspider',
         'breitbartspider',
-        #'foxspider',
-        #'guardianspider',
-        #'meespider',
-        #'timespider'
+        'foxspider',
+        'guardianspider',
+        'meespider',
+        'timespider'
     ]
     
     successful_spiders = []
