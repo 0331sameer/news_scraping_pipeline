@@ -1,6 +1,9 @@
 name: News Scraper Pipeline
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     # Runs every day at 10pm Pakistani (adjust cron for your timezone if needed)
     - cron: "0 17 * * *"
@@ -32,3 +35,6 @@ jobs:
 
       - name: Extract perspectives
         run: python extract_perspectives.py
+
+      - name: Contextualize articles
+        run: python contextualize_articles.py
